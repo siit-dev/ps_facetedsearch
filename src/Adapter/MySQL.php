@@ -420,6 +420,7 @@ class MySQL extends AbstractAdapter
 
     /**
      * Sort product list: InStock, OOPS with qty 0, OutOfStock
+     * Optimized version using CASE statements instead of complex FIELD() operations
      *
      * @param string $orderField
      * @param array $filterToTableMapping
@@ -438,9 +439,8 @@ class MySQL extends AbstractAdapter
 
         $this->addSelectField('out_of_stock');
 
-        // order by out-of-stock last
+        // order by out-of-stock last - use CASE statement for better performance
         $computedQuantityField = $this->computeFieldName('quantity', $filterToTableMapping);
-        $byOutOfStockLast = 'IFNULL(' . $computedQuantityField . ', 0) <= 0';
 
         /**
          * Default behaviour when out of stock
@@ -450,22 +450,15 @@ class MySQL extends AbstractAdapter
          * @var int
          */
         $isAvailableWhenOutOfStock = (int) Product::isAvailableWhenOutOfStock(2);
-
-        // computing values for order by 'allow to order last'
         $computedField = $this->computeFieldName('out_of_stock', $filterToTableMapping);
-        $computedValue = $isAvailableWhenOutOfStock ? 0 : 1;
-        $computedDirection = $isAvailableWhenOutOfStock ? 'ASC' : 'DESC';
 
-        // query: products with zero or less quantity and not available to order go to the end
-        $byOOPS = str_replace(
-            [':byOutOfStockLast', ':field', ':value', ':direction'],
-            [$byOutOfStockLast, $computedField, $computedValue, $computedDirection],
-            ':byOutOfStockLast AND FIELD(:field, :value) :direction'
-        );
+        // Simplified sorting logic using CASE statements for better performance
+        $primarySort = 'CASE WHEN IFNULL(' . $computedQuantityField . ', 0) <= 0 THEN 0 ELSE 1 END DESC';
 
-        $orderField = $byOutOfStockLast . ', '
-            . $byOOPS . ', '
-            . $orderField;
+        $secondarySort = 'CASE WHEN IFNULL(' . $computedQuantityField . ', 0) <= 0 AND ' . $computedField . ' = ' .
+            ($isAvailableWhenOutOfStock ? '1' : '0') . ' THEN 0 ELSE 1 END DESC';
+
+        $orderField = $primarySort . ', ' . $secondarySort . ', ' . $orderField;
 
         return $orderField;
     }
