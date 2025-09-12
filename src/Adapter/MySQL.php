@@ -634,6 +634,7 @@ class MySQL extends AbstractAdapter
 
     /**
      * Compute the joinConditions needed depending on the fields required in select, where, groupby & orderby fields
+     * Optimized version that avoids redundant joins when using initial population
      *
      * @param array $filterToTableMapping
      *
@@ -643,8 +644,18 @@ class MySQL extends AbstractAdapter
     {
         $joinList = new ArrayCollection();
 
-        $this->addJoinList($joinList, $this->getSelectFields(), $filterToTableMapping);
-        $this->addJoinList($joinList, $this->getFilters()->getKeys(), $filterToTableMapping);
+        // Get fields that are already available in the initial population to avoid redundant joins
+        $availableFields = [];
+        if ($this->getInitialPopulation() !== null) {
+            $availableFields = $this->getInitialPopulation()->getSelectFields()->toArray();
+        }
+
+        // Only add joins for fields that are not already available in the initial population
+        $selectFieldsToJoin = array_diff($this->getSelectFields()->toArray(), $availableFields);
+        $this->addJoinList($joinList, $selectFieldsToJoin, $filterToTableMapping);
+        
+        $filtersToJoin = array_diff($this->getFilters()->getKeys(), $availableFields);
+        $this->addJoinList($joinList, $filtersToJoin, $filterToTableMapping);
 
         $operationIdx = 0;
         foreach ($this->getOperationsFilters() as $filterOperations) {
@@ -673,9 +684,11 @@ class MySQL extends AbstractAdapter
             ++$operationIdx;
         }
 
-        $this->addJoinList($joinList, $this->getGroupFields()->getKeys(), $filterToTableMapping);
+        $groupFieldsToJoin = array_diff($this->getGroupFields()->getKeys(), $availableFields);
+        $this->addJoinList($joinList, $groupFieldsToJoin, $filterToTableMapping);
 
-        if (array_key_exists($this->getOrderField(), $filterToTableMapping)) {
+        if (array_key_exists($this->getOrderField(), $filterToTableMapping) 
+            && !in_array($this->getOrderField(), $availableFields)) {
             $joinMapping = $filterToTableMapping[$this->getOrderField()];
             $this->addJoinConditions($joinList, $joinMapping, $filterToTableMapping);
         }
@@ -810,6 +823,7 @@ class MySQL extends AbstractAdapter
         $this->setOrderField('');
 
         // We add basic select fields we will need to matter what
+        // Including commonly needed fields to avoid redundant joins in outer query
         $this->setSelectFields(
             [
                 'id_product',
@@ -821,6 +835,8 @@ class MySQL extends AbstractAdapter
                 'sales',
                 'on_sale',
                 'date_add',
+                'out_of_stock', // Add out_of_stock to avoid redundant stock_available joins
+                'position', // Add position to improve ORDER BY performance
             ]
         );
 
