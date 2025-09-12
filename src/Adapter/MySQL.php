@@ -653,7 +653,7 @@ class MySQL extends AbstractAdapter
         // Only add joins for fields that are not already available in the initial population
         $selectFieldsToJoin = array_diff($this->getSelectFields()->toArray(), $availableFields);
         $this->addJoinList($joinList, $selectFieldsToJoin, $filterToTableMapping);
-        
+
         $filtersToJoin = array_diff($this->getFilters()->getKeys(), $availableFields);
         $this->addJoinList($joinList, $filtersToJoin, $filterToTableMapping);
 
@@ -687,7 +687,7 @@ class MySQL extends AbstractAdapter
         $groupFieldsToJoin = array_diff($this->getGroupFields()->getKeys(), $availableFields);
         $this->addJoinList($joinList, $groupFieldsToJoin, $filterToTableMapping);
 
-        if (array_key_exists($this->getOrderField(), $filterToTableMapping) 
+        if (array_key_exists($this->getOrderField(), $filterToTableMapping)
             && !in_array($this->getOrderField(), $availableFields)) {
             $joinMapping = $filterToTableMapping[$this->getOrderField()];
             $this->addJoinConditions($joinList, $joinMapping, $filterToTableMapping);
