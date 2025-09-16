@@ -95,6 +95,11 @@ class MySQL extends AbstractAdapter
         // Prepare mapping for joined tables
         $filterToTableMapping = $this->getFieldMapping();
 
+        // visibility filter is added only to the outer query
+        if ($this->getInitialPopulation() !== null) {
+            $this->addFilter('visibility', ['both', 'catalog']);
+        }
+
         // Process and generate all fields for the SQL query below
         $orderField = $this->computeOrderByField($filterToTableMapping);
         $selectFields = $this->computeSelectFields($filterToTableMapping);
@@ -320,19 +325,54 @@ class MySQL extends AbstractAdapter
                 'tableName' => 'specific_price',
                 'tableAlias' => 'sp',
                 'joinCondition' => '(
-                    sp.id_product = p.id_product AND 
-                    sp.id_shop IN (0, ' . $this->getContext()->shop->id . ') AND 
-                    sp.id_currency IN (0, ' . $this->getContext()->currency->id . ') AND 
-                    sp.id_country IN (0, ' . $this->getContext()->country->id . ') AND 
-                    sp.id_group IN (0, ' . $this->getContext()->customer->id_default_group . ') AND 
+                    sp.id_product = p.id_product AND
+                    sp.id_shop IN (0, ' . $this->getContext()->shop->id . ') AND
+                    sp.id_currency IN (0, ' . $this->getContext()->currency->id . ') AND
+                    sp.id_country IN (0, ' . $this->getContext()->country->id . ') AND
+                    sp.id_group IN (0, ' . $this->getContext()->customer->id_default_group . ') AND
                     sp.from_quantity = 1 AND
                     sp.reduction > 0 AND
                     sp.id_customer = 0 AND
-                    sp.id_cart = 0 AND 
-                    (sp.from = \'0000-00-00 00:00:00\' OR \'' . date('Y-m-d H:i:s') . '\' >= sp.from) AND 
-                    (sp.to = \'0000-00-00 00:00:00\' OR \'' . date('Y-m-d H:i:s') . '\' <= sp.to) 
+                    sp.id_cart = 0 AND
+                    (sp.from = \'0000-00-00 00:00:00\' OR \'' . date('Y-m-d H:i:s') . '\' >= sp.from) AND
+                    (sp.to = \'0000-00-00 00:00:00\' OR \'' . date('Y-m-d H:i:s') . '\' <= sp.to)
                 )',
                 'joinType' => self::LEFT_JOIN,
+            ],
+            'id_manufacturer' => [
+                'tableName' => 'product',
+                'tableAlias' => 'mid',
+                'fieldName' => 'id_manufacturer',
+                'joinCondition' => '(p.id_product = mid.id_product)',
+                'joinType' => self::INNER_JOIN,
+            ],
+            'on_sale' => [
+                'tableName' => 'product',
+                'tableAlias' => 'ons',
+                'fieldName' => 'on_sale',
+                'joinCondition' => '(p.id_product = ons.id_product)',
+                'joinType' => self::INNER_JOIN,
+            ],
+            'date_add' => [
+                'tableName' => 'product',
+                'tableAlias' => 'dadd',
+                'fieldName' => 'date_add',
+                'joinCondition' => '(p.id_product = dadd.id_product)',
+                'joinType' => self::INNER_JOIN,
+            ],
+            'condition' => [
+                'tableName' => 'product',
+                'tableAlias' => 'pc',
+                'fieldName' => 'condition',
+                'joinCondition' => '(p.id_product = pc.id_product)',
+                'joinType' => self::INNER_JOIN,
+            ],
+            'price' => [
+                'tableName' => 'product',
+                'tableAlias' => 'prc',
+                'fieldName' => 'price',
+                'joinCondition' => '(p.id_product = prc.id_product)',
+                'joinType' => self::INNER_JOIN,
             ],
         ];
 
@@ -654,6 +694,10 @@ class MySQL extends AbstractAdapter
         $selectFieldsToJoin = array_diff($this->getSelectFields()->toArray(), $availableFields);
         $this->addJoinList($joinList, $selectFieldsToJoin, $filterToTableMapping);
 
+        // Add joins for the selected order - even if it's already in the select fields.
+        $orderFieldToJoin = $this->getOrderField();
+        $this->addJoinList($joinList, [$orderFieldToJoin], $filterToTableMapping);
+
         $filtersToJoin = array_diff($this->getFilters()->getKeys(), $availableFields);
         $this->addJoinList($joinList, $filtersToJoin, $filterToTableMapping);
 
@@ -827,14 +871,14 @@ class MySQL extends AbstractAdapter
         $this->setSelectFields(
             [
                 'id_product',
-                'id_manufacturer',
+                // 'id_manufacturer',
                 'quantity',
-                'condition',
-                'weight',
+                // 'condition',
+                // 'weight',
                 'price',
-                'sales',
-                'on_sale',
-                'date_add',
+                // 'sales',
+                // 'on_sale',
+                // 'date_add',
                 'out_of_stock', // Add out_of_stock to avoid redundant stock_available joins
                 'position', // Add position to improve ORDER BY performance
             ]
