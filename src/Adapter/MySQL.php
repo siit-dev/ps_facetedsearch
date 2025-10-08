@@ -202,16 +202,15 @@ class MySQL extends AbstractAdapter
                 // For INNER JOINs, we can safely move filter conditions to ON clause
                 // This helps the optimizer filter rows earlier
                 if ($join['joinType'] === self::INNER_JOIN) {
-                    // Find WHERE conditions that reference this table
-                    $tableName = $join['tableName'];
                     $conditionsToMove = [];
                     
                     foreach ($whereConditions as $idx => $condition) {
                         // Check if condition references this table alias
                         if (strpos($condition, $tableAlias . '.') !== false) {
-                            // Move simple equality conditions to JOIN ON
-                            // e.g., "cp.id_category = 30" or "cg.id_group = 3"
-                            if (preg_match('/^' . preg_quote($tableAlias, '/') . '\.[a-z_]+ = \d+$/', $condition)) {
+                            // Move simple equality and IN conditions to JOIN ON
+                            // e.g., "cp.id_category=30" or "cg.id_group=3" or "a.id_attribute_group=1"
+                            if (preg_match('/^\(?' . preg_quote($tableAlias, '/') . '\.[a-z_]+ = [\'"]?\d+[\'"]?\)?$/i', $condition) ||
+                                preg_match('/^\(?' . preg_quote($tableAlias, '/') . '\.[a-z_]+ IN \([^\)]+\)\)?$/i', $condition)) {
                                 $conditionsToMove[] = $condition;
                                 unset($whereConditions[$idx]);
                             }
@@ -220,8 +219,15 @@ class MySQL extends AbstractAdapter
                     
                     // Enhance join condition with moved filters
                     if (!empty($conditionsToMove)) {
-                        $join['joinCondition'] = rtrim($join['joinCondition'], ')');
-                        $join['joinCondition'] .= ' AND ' . implode(' AND ', $conditionsToMove) . ')';
+                        // Remove trailing parenthesis if present
+                        $joinCondition = $join['joinCondition'];
+                        if (substr($joinCondition, -1) === ')') {
+                            $joinCondition = substr($joinCondition, 0, -1);
+                            $joinCondition .= ' AND ' . implode(' AND ', $conditionsToMove) . ')';
+                        } else {
+                            $joinCondition .= ' AND ' . implode(' AND ', $conditionsToMove);
+                        }
+                        $join['joinCondition'] = $joinCondition;
                     }
                 }
                 
@@ -265,20 +271,28 @@ class MySQL extends AbstractAdapter
         }
 
         // Only flatten if we're doing a count operation with a simple group by
-        // and the initial population doesn't have complex operations filters that need subquery evaluation
-        if ($hasCountDistinct && !$this->getGroupFields()->isEmpty()) {
-            // Check if initial population has operation filters that would require subquery
-            $initialOpsFilters = $this->getInitialPopulation()->getOperationsFilters();
-            
-            // If there are operation filters, we need to keep the subquery to properly evaluate them
-            if (!$initialOpsFilters->isEmpty()) {
-                return false;
-            }
-
-            return true;
+        if (!$hasCountDistinct || $this->getGroupFields()->isEmpty()) {
+            return false;
+        }
+        
+        // Check if initial population has operation filters that would require subquery
+        $initialOpsFilters = $this->getInitialPopulation()->getOperationsFilters();
+        
+        // If there are operation filters, we need to keep the subquery to properly evaluate them
+        if (!$initialOpsFilters->isEmpty()) {
+            return false;
         }
 
-        return false;
+        // Check if the group field is simple (not an aggregate or computed field)
+        $groupFields = $this->getGroupFields()->toArray();
+        foreach ($groupFields as $field) {
+            // If it contains parentheses or dots, it might be complex
+            if (strpos($field, '(') !== false) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
