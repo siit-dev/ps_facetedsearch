@@ -107,7 +107,7 @@ class MySQL extends AbstractAdapter
 
         // Check if we can optimize by flattening the query
         $canFlatten = $this->canFlattenQuery();
-        
+
         // Store flattening state for use in computeFieldName
         $this->isFlattening = $canFlatten;
 
@@ -123,24 +123,24 @@ class MySQL extends AbstractAdapter
         // OR if we can flatten the query to improve performance
         if ($this->getInitialPopulation() === null || $canFlatten) {
             $referenceTable = _DB_PREFIX_ . 'product';
-            
+
             // If flattening, we need to merge initial population's conditions into this query
             if ($canFlatten && $this->getInitialPopulation() !== null) {
                 // Get initial population's join and where conditions
                 $initialJoinConditions = $this->getInitialPopulation()->computeJoinConditions($filterToTableMapping);
                 $initialWhereConditions = $this->getInitialPopulation()->computeWhereConditions($filterToTableMapping);
-                
+
                 // Merge join conditions, avoiding duplicates
                 foreach ($initialJoinConditions as $key => $joinInfo) {
                     if (!$joinConditions->containsKey($key)) {
                         $joinConditions->set($key, $joinInfo);
                     }
                 }
-                
+
                 // Optimize: Move WHERE conditions to JOIN ON clauses where beneficial
                 // This is done by enhancing join conditions with filter predicates
                 $joinConditions = $this->optimizeJoinConditions($joinConditions, $initialWhereConditions, $filterToTableMapping);
-                
+
                 // Merge remaining where conditions that couldn't be moved to JOIN ON
                 foreach ($initialWhereConditions as $condition) {
                     // Only add if not already moved to JOIN condition
@@ -187,7 +187,7 @@ class MySQL extends AbstractAdapter
                 $query .= ', p.id_product DESC';
             }
         }
-        
+
         // Reset flattening state
         $this->isFlattening = false;
 
@@ -207,14 +207,14 @@ class MySQL extends AbstractAdapter
     protected function optimizeJoinConditions($joinConditions, &$whereConditions, $filterToTableMapping)
     {
         $optimizedJoins = new ArrayCollection();
-        
+
         foreach ($joinConditions as $key => $joinInfo) {
             foreach ($joinInfo as $tableAlias => $join) {
                 // For INNER JOINs, we can safely move filter conditions to ON clause
                 // This helps the optimizer filter rows earlier
                 if ($join['joinType'] === self::INNER_JOIN) {
                     $conditionsToMove = [];
-                    
+
                     foreach ($whereConditions as $idx => $condition) {
                         // Check if condition references this table alias
                         if (strpos($condition, $tableAlias . '.') !== false) {
@@ -227,7 +227,7 @@ class MySQL extends AbstractAdapter
                             }
                         }
                     }
-                    
+
                     // Enhance join condition with moved filters
                     if (!empty($conditionsToMove)) {
                         // Remove trailing parenthesis if present
@@ -241,7 +241,7 @@ class MySQL extends AbstractAdapter
                         $join['joinCondition'] = $joinCondition;
                     }
                 }
-                
+
                 if (!$optimizedJoins->containsKey($key)) {
                     $optimizedJoins->set($key, []);
                 }
@@ -250,10 +250,10 @@ class MySQL extends AbstractAdapter
                 $optimizedJoins->set($key, $current);
             }
         }
-        
+
         // Re-index whereConditions array after unsetting elements
         $whereConditions = array_values($whereConditions);
-        
+
         return $optimizedJoins;
     }
 
@@ -285,10 +285,10 @@ class MySQL extends AbstractAdapter
         if (!$hasCountDistinct || $this->getGroupFields()->isEmpty()) {
             return false;
         }
-        
+
         // Check if initial population has operation filters that would require subquery
         $initialOpsFilters = $this->getInitialPopulation()->getOperationsFilters();
-        
+
         // If there are operation filters, we need to keep the subquery to properly evaluate them
         if (!$initialOpsFilters->isEmpty()) {
             return false;
