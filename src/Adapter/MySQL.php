@@ -45,6 +45,11 @@ class MySQL extends AbstractAdapter
     const INNER_JOIN = 'INNER JOIN';
 
     /**
+     * @var bool Flag to indicate if query is being flattened
+     */
+    protected $isFlattening = false;
+
+    /**
      * {@inheritdoc}
      */
     public function getMinMaxPriceValue()
@@ -100,6 +105,12 @@ class MySQL extends AbstractAdapter
             $this->addFilter('visibility', ['both', 'catalog']);
         }
 
+        // Check if we can optimize by flattening the query
+        $canFlatten = $this->canFlattenQuery();
+        
+        // Store flattening state for use in computeFieldName
+        $this->isFlattening = $canFlatten;
+
         // Process and generate all fields for the SQL query below
         $orderField = $this->computeOrderByField($filterToTableMapping);
         $selectFields = $this->computeSelectFields($filterToTableMapping);
@@ -109,8 +120,35 @@ class MySQL extends AbstractAdapter
 
         // Now, let's build the query...
         // If this query IS the initial population (the base table), we are selecting from product table
-        if ($this->getInitialPopulation() === null) {
+        // OR if we can flatten the query to improve performance
+        if ($this->getInitialPopulation() === null || $canFlatten) {
             $referenceTable = _DB_PREFIX_ . 'product';
+            
+            // If flattening, we need to merge initial population's conditions into this query
+            if ($canFlatten && $this->getInitialPopulation() !== null) {
+                // Get initial population's join and where conditions
+                $initialJoinConditions = $this->getInitialPopulation()->computeJoinConditions($filterToTableMapping);
+                $initialWhereConditions = $this->getInitialPopulation()->computeWhereConditions($filterToTableMapping);
+                
+                // Merge join conditions, avoiding duplicates
+                foreach ($initialJoinConditions as $key => $joinInfo) {
+                    if (!$joinConditions->containsKey($key)) {
+                        $joinConditions->set($key, $joinInfo);
+                    }
+                }
+                
+                // Optimize: Move WHERE conditions to JOIN ON clauses where beneficial
+                // This is done by enhancing join conditions with filter predicates
+                $joinConditions = $this->optimizeJoinConditions($joinConditions, $initialWhereConditions, $filterToTableMapping);
+                
+                // Merge remaining where conditions that couldn't be moved to JOIN ON
+                foreach ($initialWhereConditions as $condition) {
+                    // Only add if not already moved to JOIN condition
+                    if (!in_array($condition, $whereConditions)) {
+                        $whereConditions[] = $condition;
+                    }
+                }
+            }
         // If not, we will call this function again but for the initial population
         } else {
             $referenceTable = '(' . $this->getInitialPopulation()->getQuery() . ')';
@@ -149,8 +187,123 @@ class MySQL extends AbstractAdapter
                 $query .= ', p.id_product DESC';
             }
         }
+        
+        // Reset flattening state
+        $this->isFlattening = false;
 
         return $query;
+    }
+
+    /**
+     * Optimize join conditions by moving WHERE conditions into JOIN ON clauses where beneficial
+     * This allows the database to filter rows earlier in INNER JOINs
+     *
+     * @param ArrayCollection $joinConditions
+     * @param array $whereConditions
+     * @param array $filterToTableMapping
+     *
+     * @return ArrayCollection
+     */
+    protected function optimizeJoinConditions($joinConditions, &$whereConditions, $filterToTableMapping)
+    {
+        $optimizedJoins = new ArrayCollection();
+        
+        foreach ($joinConditions as $key => $joinInfo) {
+            foreach ($joinInfo as $tableAlias => $join) {
+                // For INNER JOINs, we can safely move filter conditions to ON clause
+                // This helps the optimizer filter rows earlier
+                if ($join['joinType'] === self::INNER_JOIN) {
+                    $conditionsToMove = [];
+                    
+                    foreach ($whereConditions as $idx => $condition) {
+                        // Check if condition references this table alias
+                        if (strpos($condition, $tableAlias . '.') !== false) {
+                            // Move simple equality and IN conditions to JOIN ON
+                            // e.g., "cp.id_category=30" or "cg.id_group=3" or "a.id_attribute_group=1"
+                            if (preg_match('/^\(?' . preg_quote($tableAlias, '/') . '\.[a-z_]+ = [\'"]?\d+[\'"]?\)?$/i', $condition) ||
+                                preg_match('/^\(?' . preg_quote($tableAlias, '/') . '\.[a-z_]+ IN \([^\)]+\)\)?$/i', $condition)) {
+                                $conditionsToMove[] = $condition;
+                                unset($whereConditions[$idx]);
+                            }
+                        }
+                    }
+                    
+                    // Enhance join condition with moved filters
+                    if (!empty($conditionsToMove)) {
+                        // Remove trailing parenthesis if present
+                        $joinCondition = $join['joinCondition'];
+                        if (substr($joinCondition, -1) === ')') {
+                            $joinCondition = substr($joinCondition, 0, -1);
+                            $joinCondition .= ' AND ' . implode(' AND ', $conditionsToMove) . ')';
+                        } else {
+                            $joinCondition .= ' AND ' . implode(' AND ', $conditionsToMove);
+                        }
+                        $join['joinCondition'] = $joinCondition;
+                    }
+                }
+                
+                if (!$optimizedJoins->containsKey($key)) {
+                    $optimizedJoins->set($key, []);
+                }
+                $current = $optimizedJoins->get($key);
+                $current[$tableAlias] = $join;
+                $optimizedJoins->set($key, $current);
+            }
+        }
+        
+        // Re-index whereConditions array after unsetting elements
+        $whereConditions = array_values($whereConditions);
+        
+        return $optimizedJoins;
+    }
+
+    /**
+     * Check if we can flatten the query by removing the subquery
+     * This is possible when we're doing a simple valueCount operation
+     * without complex aggregations that depend on the subquery
+     *
+     * @return bool
+     */
+    protected function canFlattenQuery()
+    {
+        // Can only flatten if we have an initial population
+        if ($this->getInitialPopulation() === null) {
+            return false;
+        }
+
+        // Check if this is a simple valueCount query (has COUNT(DISTINCT) in select)
+        $selectFields = $this->getSelectFields()->toArray();
+        $hasCountDistinct = false;
+        foreach ($selectFields as $field) {
+            if (strpos($field, 'COUNT(DISTINCT') !== false) {
+                $hasCountDistinct = true;
+                break;
+            }
+        }
+
+        // Only flatten if we're doing a count operation with a simple group by
+        if (!$hasCountDistinct || $this->getGroupFields()->isEmpty()) {
+            return false;
+        }
+        
+        // Check if initial population has operation filters that would require subquery
+        $initialOpsFilters = $this->getInitialPopulation()->getOperationsFilters();
+        
+        // If there are operation filters, we need to keep the subquery to properly evaluate them
+        if (!$initialOpsFilters->isEmpty()) {
+            return false;
+        }
+
+        // Check if the group field is simple (not an aggregate or computed field)
+        $groupFields = $this->getGroupFields()->toArray();
+        foreach ($groupFields as $field) {
+            // If it contains parentheses or dots, it might be complex
+            if (strpos($field, '(') !== false) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -242,21 +395,21 @@ class MySQL extends AbstractAdapter
             'nleft' => [
                 'tableName' => 'category',
                 'tableAlias' => 'c',
-                'joinCondition' => '(cp.id_category = c.id_category AND c.active=1)',
+                'joinCondition' => '(cp.id_category = c.id_category AND c.active = 1)',
                 'joinType' => self::INNER_JOIN,
                 'dependencyField' => 'id_category',
             ],
             'nright' => [
                 'tableName' => 'category',
                 'tableAlias' => 'c',
-                'joinCondition' => '(cp.id_category = c.id_category AND c.active=1)',
+                'joinCondition' => '(cp.id_category = c.id_category AND c.active = 1)',
                 'joinType' => self::INNER_JOIN,
                 'dependencyField' => 'id_category',
             ],
             'level_depth' => [
                 'tableName' => 'category',
                 'tableAlias' => 'c',
-                'joinCondition' => '(cp.id_category = c.id_category AND c.active=1)',
+                'joinCondition' => '(cp.id_category = c.id_category AND c.active = 1)',
                 'joinType' => self::INNER_JOIN,
                 'dependencyField' => 'id_category',
             ],
@@ -519,6 +672,7 @@ class MySQL extends AbstractAdapter
                 // unless a fieldName key exists
                 isset($filterToTableMapping[$fieldName]['fieldName'])
                 || $this->getInitialPopulation() === null
+                || $this->isFlattening  // When flattening, treat as if no initial population
                 || !$this->getInitialPopulation()->getSelectFields()->contains($fieldName)
             )
         ) {
