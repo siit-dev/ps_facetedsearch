@@ -45,6 +45,11 @@ class MySQL extends AbstractAdapter
     const INNER_JOIN = 'INNER JOIN';
 
     /**
+     * @var bool Flag to indicate if query is being flattened
+     */
+    protected $isFlattening = false;
+
+    /**
      * {@inheritdoc}
      */
     public function getMinMaxPriceValue()
@@ -102,6 +107,9 @@ class MySQL extends AbstractAdapter
 
         // Check if we can optimize by flattening the query
         $canFlatten = $this->canFlattenQuery();
+        
+        // Store flattening state for use in computeFieldName
+        $this->isFlattening = $canFlatten;
 
         // Process and generate all fields for the SQL query below
         $orderField = $this->computeOrderByField($filterToTableMapping);
@@ -179,6 +187,9 @@ class MySQL extends AbstractAdapter
                 $query .= ', p.id_product DESC';
             }
         }
+        
+        // Reset flattening state
+        $this->isFlattening = false;
 
         return $query;
     }
@@ -661,6 +672,7 @@ class MySQL extends AbstractAdapter
                 // unless a fieldName key exists
                 isset($filterToTableMapping[$fieldName]['fieldName'])
                 || $this->getInitialPopulation() === null
+                || $this->isFlattening  // When flattening, treat as if no initial population
                 || !$this->getInitialPopulation()->getSelectFields()->contains($fieldName)
             )
         ) {
