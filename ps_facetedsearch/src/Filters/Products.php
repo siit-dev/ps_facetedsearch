@@ -84,7 +84,7 @@ class Products
         }
 
         // Get full list of matching products
-        $fullProductList = $this->searchAdapter->execute();
+        $fullProductList = $this->searchAdapter->execute() ?: [];
 
         // Count them
         $totalProductCount = count($fullProductList);
@@ -104,7 +104,7 @@ class Products
         $this->pricePostFiltering($finalProductList, $selectedFilters);
 
         return [
-            'products' => $finalProductList ?: [],
+            'products' => $finalProductList,
             'count' => $totalProductCount,
         ];
     }
