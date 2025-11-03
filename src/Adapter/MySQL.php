@@ -669,17 +669,29 @@ class MySQL extends AbstractAdapter
         if (array_key_exists($fieldName, $filterToTableMapping)
             && (
                 // If the requested order field is in the result, no need to change tableAlias
-                // unless a fieldName key exists
-                isset($filterToTableMapping[$fieldName]['fieldName'])
+                // unless a fieldName key exists AND the field is not already in initial population
+                (isset($filterToTableMapping[$fieldName]['fieldName'])
+                    && ($this->getInitialPopulation() === null
+                        || $this->isFlattening
+                        || !$this->getInitialPopulation()->getSelectFields()->contains($fieldName)))
                 || $this->getInitialPopulation() === null
                 || $this->isFlattening  // When flattening, treat as if no initial population
                 || !$this->getInitialPopulation()->getSelectFields()->contains($fieldName)
             )
         ) {
             $joinMapping = $filterToTableMapping[$fieldName];
+            $originalFieldName = $fieldName;
             $fieldName = $joinMapping['tableAlias'] . '.' . (isset($joinMapping['fieldName']) ? $joinMapping['fieldName'] : $fieldName);
             if ($sortByField === false) {
-                $fieldName .= isset($joinMapping['fieldAlias']) ? ' as ' . $joinMapping['fieldAlias'] : '';
+                // If an explicit fieldAlias is defined, use it
+                if (isset($joinMapping['fieldAlias'])) {
+                    $fieldName .= ' as ' . $joinMapping['fieldAlias'];
+                }
+                // Otherwise, if we're using a different table alias than 'p' and we have an explicit fieldName,
+                // auto-alias back to the original field name so outer queries can reference it
+                elseif ($joinMapping['tableAlias'] !== 'p' && isset($joinMapping['fieldName']) && $this->getInitialPopulation() === null) {
+                    $fieldName .= ' as ' . $originalFieldName;
+                }
             }
 
             if (isset($joinMapping['aggregateFunction'], $joinMapping['aggregateFieldName'])) {
